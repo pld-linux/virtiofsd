@@ -1,0 +1,179 @@
+--- virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/fuse.rs.orig	2024-01-24 10:36:29.000000000 +0100
++++ virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/fuse.rs	2024-04-04 16:44:56.865682682 +0200
+@@ -853,12 +853,12 @@ impl From<SetattrIn> for libc::stat64 {
+         out.st_uid = sai.uid;
+         out.st_gid = sai.gid;
+         out.st_size = sai.size as i64;
+-        out.st_atime = sai.atime as i64;
+-        out.st_mtime = sai.mtime as i64;
+-        out.st_ctime = sai.ctime as i64;
+-        out.st_atime_nsec = sai.atimensec.into();
+-        out.st_mtime_nsec = sai.mtimensec.into();
+-        out.st_ctime_nsec = sai.ctimensec.into();
++        out.st_atime = sai.atime as libc::time_t;
++        out.st_mtime = sai.mtime as libc::time_t;
++        out.st_ctime = sai.ctime as libc::time_t;
++        out.st_atime_nsec = sai.atimensec as libc::c_long;
++        out.st_mtime_nsec = sai.mtimensec as libc::c_long;
++        out.st_ctime_nsec = sai.ctimensec as libc::c_long;
+ 
+         out
+     }
+--- virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/seccomp.rs.orig	2024-01-24 10:36:29.000000000 +0100
++++ virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/seccomp.rs	2024-04-04 16:46:45.105994545 +0200
+@@ -138,7 +138,15 @@ pub fn enable_seccomp(action: SeccompAct
+     allow_syscall!(ctx, libc::SYS_mremap);
+     allow_syscall!(ctx, libc::SYS_munmap);
+     allow_syscall!(ctx, libc::SYS_name_to_handle_at);
+-    #[cfg(not(target_arch = "loongarch64"))]
++    #[cfg(any(
++        target_arch = "riscv32",
++        target_arch = "aarch64",
++        target_arch = "mips64",
++        target_arch = "powerpc64",
++        target_arch = "riscv64",
++        target_arch = "s390x",
++        target_arch = "x86_64"
++    ))]
+     allow_syscall!(ctx, libc::SYS_newfstatat);
+     #[cfg(target_arch = "powerpc64")]
+     allow_syscall!(ctx, libc::SYS__llseek);
+--- virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/limits.rs.orig	2024-01-24 10:36:29.000000000 +0100
++++ virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/limits.rs	2024-04-04 16:47:32.964446744 +0200
+@@ -60,14 +60,14 @@ pub fn setup_rlimit_nofile(nofile: Optio
+         if DEFAULT_NOFILE <= rlim_cur {
+             return Ok(()); // the user has already setup the soft limit higher than the target
+         }
+-        cmp::min(DEFAULT_NOFILE, max_nofile)
++        cmp::min(DEFAULT_NOFILE, max_nofile) as u64
+     };
+ 
+-    if target_limit > max_nofile {
++    if target_limit > max_nofile.into() {
+         return Err(format!("It cannot be increased above {max_nofile}"));
+     }
+ 
+-    if let Err(error) = setup_rlimit_nofile_to(target_limit) {
++    if let Err(error) = setup_rlimit_nofile_to(target_limit as _) {
+         if nofile.is_some() {
+             // Error attempting to setup user-supplied value
+             return Err(error);
+--- virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/oslib.rs.orig	2024-01-24 10:36:29.000000000 +0100
++++ virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/oslib.rs	2024-04-04 16:48:29.410346745 +0200
+@@ -78,7 +78,7 @@ pub fn mount(source: Option<&str>, targe
+     let fstype = fstype.as_ptr();
+ 
+     // Safety: `source`, `target` or `fstype` are a valid C string pointers
+-    check_retval(unsafe { libc::mount(source, target, fstype, flags, std::ptr::null()) })?;
++    check_retval(unsafe { libc::mount(source, target, fstype, flags as libc::c_ulong, std::ptr::null()) })?;
+     Ok(())
+ }
+ 
+@@ -292,14 +292,14 @@ mod writev {
+     /// we need to call it using `syscall(2)`.
+ 
+     #[cfg(target_env = "gnu")]
+-    pub use libc::pwritev2;
++    pub use libc::pwritev64v2;
+ 
+     #[cfg(target_env = "musl")]
+-    pub unsafe fn pwritev2(
++    pub unsafe fn pwritev64v2(
+         fd: libc::c_int,
+         iov: *const libc::iovec,
+         iovcnt: libc::c_int,
+-        offset: libc::off_t,
++        offset: libc::off64_t,
+         flags: libc::c_int,
+     ) -> libc::ssize_t {
+         // The `pwritev2(2)` syscall expects to receive the 64-bit offset split in
+@@ -389,7 +389,7 @@ pub unsafe fn writev_at(
+     // to the iovec slice `ìovecs` of `iovcnt` elements. However, the caller
+     // must ensure that each iovec element has a valid `iov_base` pointer and `iov_len`.
+     let bytes_written = check_retval(unsafe {
+-        writev::pwritev2(
++        writev::pwritev64v2(
+             fd.as_raw_fd(),
+             iovecs.as_ptr(),
+             iovecs.len() as libc::c_int,
+--- virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/passthrough/stat.rs.orig	2024-01-24 10:36:29.000000000 +0100
++++ virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/passthrough/stat.rs	2024-04-04 16:51:39.854546518 +0200
+@@ -61,11 +61,11 @@ impl SafeStatXAccess for statx_st {
+             st.st_size = self.stx_size as _;
+             st.st_blksize = self.stx_blksize as _;
+             st.st_blocks = self.stx_blocks as _;
+-            st.st_atime = self.stx_atime.tv_sec;
++            st.st_atime = self.stx_atime.tv_sec as _;
+             st.st_atime_nsec = self.stx_atime.tv_nsec as _;
+-            st.st_mtime = self.stx_mtime.tv_sec;
++            st.st_mtime = self.stx_mtime.tv_sec as _;
+             st.st_mtime_nsec = self.stx_mtime.tv_nsec as _;
+-            st.st_ctime = self.stx_ctime.tv_sec;
++            st.st_ctime = self.stx_ctime.tv_sec as _;
+             st.st_ctime_nsec = self.stx_ctime.tv_nsec as _;
+ 
+             Some(st)
+--- virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/passthrough/mod.rs.orig	2024-01-24 10:36:29.000000000 +0100
++++ virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/passthrough/mod.rs	2024-04-04 16:55:55.644256430 +0200
+@@ -1680,7 +1680,7 @@ impl FileSystem for PassthroughFs {
+             // Safe because this doesn't modify any memory and we check the return value.
+             let res = self
+                 .clear_file_capabilities(fd, false)
+-                .map(|_| unsafe { libc::ftruncate(fd, attr.st_size) })?;
++                .map(|_| unsafe { libc::ftruncate64(fd, attr.st_size) })?;
+             if res < 0 {
+                 return Err(io::Error::last_os_error());
+             }
+@@ -2384,7 +2384,7 @@ impl FileSystem for PassthroughFs {
+         let fd = data.file.write().unwrap().as_raw_fd();
+ 
+         // Safe because this doesn't modify any memory and we check the return value.
+-        let res = unsafe { libc::lseek(fd, offset as libc::off64_t, whence as libc::c_int) };
++        let res = unsafe { libc::lseek64(fd, offset as libc::off64_t, whence as libc::c_int) };
+         if res < 0 {
+             Err(io::Error::last_os_error())
+         } else {
+--- virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/sandbox.rs.orig	2024-01-24 10:36:29.000000000 +0100
++++ virtiofsd-v1.10.1-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc/src/sandbox.rs	2024-04-04 16:57:26.323451785 +0200
+@@ -205,20 +205,20 @@ impl Sandbox {
+ 
+         // Ensure our mount changes don't affect the parent mount namespace.
+ 
+-        oslib::mount(None, "/", None, libc::MS_SLAVE | libc::MS_REC).map_err(Error::CleanMount)?;
++        oslib::mount(None, "/", None, (libc::MS_SLAVE | libc::MS_REC).into()).map_err(Error::CleanMount)?;
+ 
+         // Mount `/proc` in this context.
+         oslib::mount(
+             "proc".into(),
+             "/proc",
+             "proc".into(),
+-            libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_NOSUID | libc::MS_RELATIME,
++            (libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_NOSUID | libc::MS_RELATIME).into(),
+         )
+         .map_err(Error::MountProc)?;
+ 
+         // Bind-mount `/proc/self/fd` onto /proc preventing access to ancestor
+         // directories.
+-        oslib::mount("/proc/self/fd".into(), "/proc", None, libc::MS_BIND)
++        oslib::mount("/proc/self/fd".into(), "/proc", None, libc::MS_BIND.into())
+             .map_err(Error::BindMountProcSelfFd)?;
+ 
+         // Obtain a file descriptor to /proc/self/fd/ by opening bind-mounted /proc directory.
+@@ -235,7 +235,7 @@ impl Sandbox {
+             self.shared_dir.as_str().into(),
+             self.shared_dir.as_str(),
+             None,
+-            libc::MS_BIND | libc::MS_REC,
++            (libc::MS_BIND | libc::MS_REC).into(),
+         )
+         .map_err(Error::BindMountSharedDir)?;
+ 
+@@ -283,7 +283,7 @@ impl Sandbox {
+         oslib::fchdir(oldroot_fd).map_err(Error::ChdirOldRoot)?;
+ 
+         // Clean up old root to avoid mount namespace propagation.
+-        oslib::mount(None, ".", None, libc::MS_SLAVE | libc::MS_REC).map_err(Error::CleanMount)?;
++        oslib::mount(None, ".", None, (libc::MS_SLAVE | libc::MS_REC).into()).map_err(Error::CleanMount)?;
+ 
+         // Lazily unmount old root.
+         oslib::umount2(".", libc::MNT_DETACH).map_err(Error::UmountOldRoot)?;
