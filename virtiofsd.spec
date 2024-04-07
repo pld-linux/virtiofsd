@@ -11,6 +11,7 @@ Source0:	https://gitlab.com/virtio-fs/virtiofsd/-/archive/v%{version}/%{name}-%{
 Source1:	%{name}-vendor-v%{version}.tar.xz
 # Source1-md5:	a63d6dd1d1f755893b31fbbf545b9636
 Patch0:		%{name}-x86.patch
+Patch1:		vmm-sys-util-x32.patch
 URL:		https://gitlab.com/virtio-fs/virtiofsd
 BuildRequires:	cargo
 BuildRequires:	libcap-ng-devel
@@ -28,6 +29,7 @@ Demon urządzeń vhost-user virtio-fs, napisany w języku Rust.
 %prep
 %setup -q -n %{name}-v%{version}-3988b7304ceb2fdb4eed2c8bf8682e6ea19c4ecc -a1
 %patch0 -p1
+%patch1 -p1
 
 %{__sed} -i -e 's,/usr/libexec/,%{_libexecdir}/,' 50-virtiofsd.json
 

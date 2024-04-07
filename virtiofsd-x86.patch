@@ -13,9 +13,9 @@
 +        out.st_atime = sai.atime as libc::time_t;
 +        out.st_mtime = sai.mtime as libc::time_t;
 +        out.st_ctime = sai.ctime as libc::time_t;
-+        out.st_atime_nsec = sai.atimensec as libc::c_long;
-+        out.st_mtime_nsec = sai.mtimensec as libc::c_long;
-+        out.st_ctime_nsec = sai.ctimensec as libc::c_long;
++        out.st_atime_nsec = sai.atimensec as _;
++        out.st_mtime_nsec = sai.mtimensec as _;
++        out.st_ctime_nsec = sai.ctimensec as _;
  
          out
      }
@@ -124,6 +124,34 @@
              if res < 0 {
                  return Err(io::Error::last_os_error());
              }
+@@ -1690,23 +1690,23 @@ impl FileSystem for PassthroughFs {
+             let mut tvs = [
+                 libc::timespec {
+                     tv_sec: 0,
+-                    tv_nsec: libc::UTIME_OMIT,
++                    tv_nsec: libc::UTIME_OMIT as _,
+                 },
+                 libc::timespec {
+                     tv_sec: 0,
+-                    tv_nsec: libc::UTIME_OMIT,
++                    tv_nsec: libc::UTIME_OMIT as _,
+                 },
+             ];
+ 
+             if valid.contains(SetattrValid::ATIME_NOW) {
+-                tvs[0].tv_nsec = libc::UTIME_NOW;
++                tvs[0].tv_nsec = libc::UTIME_NOW as _;
+             } else if valid.contains(SetattrValid::ATIME) {
+                 tvs[0].tv_sec = attr.st_atime;
+                 tvs[0].tv_nsec = attr.st_atime_nsec;
+             }
+ 
+             if valid.contains(SetattrValid::MTIME_NOW) {
+-                tvs[1].tv_nsec = libc::UTIME_NOW;
++                tvs[1].tv_nsec = libc::UTIME_NOW as _;
+             } else if valid.contains(SetattrValid::MTIME) {
+                 tvs[1].tv_sec = attr.st_mtime;
+                 tvs[1].tv_nsec = attr.st_mtime_nsec;
 @@ -2384,7 +2384,7 @@ impl FileSystem for PassthroughFs {
          let fd = data.file.write().unwrap().as_raw_fd();
  
